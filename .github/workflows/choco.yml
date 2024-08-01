@@ -1,0 +1,60 @@
+name: choco
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag to run against. This trigger runs the GoReleaser and MSI builder.
+        required: true
+
+jobs:
+  release:
+    name: Deploy to chocolately
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Normalize tag values
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] ; then
+              VER=${{ github.event.inputs.tag }}
+          else
+              VER=${GITHUB_REF/refs\/tags\//}
+          fi
+
+          VERSION=${VER//v}
+
+          echo "VER_TAG=$VER" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup PowerShell module cache
+        id: cacher
+        uses: actions/cache@v3
+        with:
+          path: "~/.local/share/powershell/Modules"
+          key: ${{ runner.os }}-InvokeBuild
+
+      - name: Install required PowerShell modules
+        if: steps.cacher.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module InvokeBuild -ErrorAction Stop
+      
+      - name: Invoke build script
+        shell: pwsh
+        run: Invoke-Build
+      
+      - name: Test
+        run: go test -v .
+
+      - name: Deploy
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+        run: |
+          choco apiKey -k $CHOCOLATEY_API_KEY -s https://push.chocolatey.org/
+          choco push ./choco/saml2aws.${env.VERSION}.nupkg -s https://push.chocolatey.org/
